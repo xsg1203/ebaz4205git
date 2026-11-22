@@ -39,6 +39,11 @@ sim/work/
 xsim.dir/
 *.stacktrace
 
+# Vivado 运行期杂散产物
+fsm_encoding.os
+usage_statistics_webtalk.html
+usage_statistics_webtalk.xml
+
 # 旧的独立仓库（fpga-git-starter），不在本仓库追踪
 fpga-git-starter/
 
