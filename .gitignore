@@ -1,0 +1,53 @@
+# Vivado 工程产物（由脚本重建，不入库）
+build/
+*.xpr
+*.jou
+*.log
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.srcs/
+*.gen/
+*.Xil/
+*.strategy/
+
+# Vivado 中间文件
+*.rpt
+*.dcp
+*.bit
+*.bin
+*.mcs
+*.prm
+*.mmi
+*.ltx
+*.drc
+*.pb
+*.routed
+*.placed
+*.ncd
+*.pcf
+*.syr
+
+# 仿真波形与编译产物
+sim/work/
+*.wdb
+*.vcd
+*.fst
+*.ghw
+xsim.dir/
+*.stacktrace
+
+# 旧的独立仓库（fpga-git-starter），不在本仓库追踪
+fpga-git-starter/
+
+# 编辑器/系统
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# WorkBuddy 本地元数据
+.workbuddy/
