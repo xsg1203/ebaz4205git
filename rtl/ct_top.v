@@ -175,41 +175,75 @@ module ct_top (
     reg [15:0] px_cnt;
     reg [15:0] pdiv;
     reg        vs_seen;
+    reg [15:0] raw_nz;      // HREF 期间原始字节非零计数（诊断数据线）
+    reg        href_live;   // HREF 高电平粘滞（诊断行有效信号）
+    reg        vld_live;    // pix_vld 触发过（诊断：采集状态机是否产出像素）
+    reg        pixnz_live;  // pix 非零过（诊断：合成像素值是否非零）
+    reg        coord_live;  // cx/cy 在有效范围过（诊断：坐标是否越界）
 
     always @(posedge ov_pclk or negedge rst_n_pclk) begin
         if (!rst_n_pclk) begin
-            px_cnt  <= 16'd0;
-            pdiv    <= 16'd0;
-            vs_seen <= 1'b0;
+            px_cnt     <= 16'd0;
+            pdiv       <= 16'd0;
+            vs_seen    <= 1'b0;
+            raw_nz     <= 16'd0;
+            href_live  <= 1'b0;
+            vld_live   <= 1'b0;
+            pixnz_live <= 1'b0;
+            coord_live <= 1'b0;
         end else begin
             if (wr_en && (pix != 16'd0)) px_cnt <= px_cnt + 16'd1;
             pdiv <= pdiv + 16'd1;
             if (frame_start) vs_seen <= 1'b1;
+            // 诊断：HREF 高电平期间，原始字节非零则计数
+            if (ov_href && (ov_data != 8'd0)) raw_nz <= raw_nz + 16'd1;
+            if (ov_href) href_live <= 1'b1;
+            if (pix_vld) vld_live <= 1'b1;
+            if (pix_vld && (pix != 16'd0)) pixnz_live <= 1'b1;
+            if (pix_vld && (cx < 10'd640) && (cy < 10'd480)) coord_live <= 1'b1;
         end
     end
 
     wire px_tog  = px_cnt[12];   // 每 4096 个非零像素翻一次
     wire clk_tog = pdiv[13];     // 每 8192 个 PCLK 翻一次
+    wire raw_tog = raw_nz[12];   // 每 4096 个非零原始字节翻一次（诊断）
 
     reg pt_s1, pt_s2, ct_s1, ct_s2, vss_s1, vss_s2;
+    reg rt_s1, rt_s2, hl_s1, hl_s2;
     reg px_nz, pclk_alive, vs_seen_s;
+    reg raw_nz_s, href_live_s, vld_live_s;
+    reg pixnz_live_s, coord_live_s;
 
     always @(posedge clk_pix or negedge rst_n_pix) begin
         if (!rst_n_pix) begin
             pt_s1 <= 1'b0; pt_s2 <= 1'b0;
             ct_s1 <= 1'b0; ct_s2 <= 1'b0;
             vss_s1 <= 1'b0; vss_s2 <= 1'b0;
+            rt_s1 <= 1'b0; rt_s2 <= 1'b0;
+            hl_s1 <= 1'b0; hl_s2 <= 1'b0;
             px_nz <= 1'b0;
             pclk_alive <= 1'b0;
             vs_seen_s <= 1'b0;
+            raw_nz_s <= 1'b0;
+            href_live_s <= 1'b0;
+            vld_live_s <= 1'b0;
+            pixnz_live_s <= 1'b0;
+            coord_live_s <= 1'b0;
         end else begin
             pt_s1 <= px_tog;    pt_s2 <= pt_s1;
             ct_s1 <= clk_tog;   ct_s2 <= ct_s1;
             vss_s1 <= vs_seen;  vss_s2 <= vss_s1;
+            rt_s1 <= raw_tog;   rt_s2 <= rt_s1;
+            hl_s1 <= href_live; hl_s2 <= hl_s1;
 
             if (pt_s1 ^ pt_s2) px_nz      <= 1'b1;
             if (ct_s1 ^ ct_s2) pclk_alive <= 1'b1;
             if (vss_s2)        vs_seen_s  <= 1'b1;
+            if (rt_s1 ^ rt_s2) raw_nz_s   <= 1'b1;
+            if (hl_s2)         href_live_s <= 1'b1;
+            if (vld_live)      vld_live_s <= 1'b1;
+            if (pixnz_live)    pixnz_live_s <= 1'b1;
+            if (coord_live)    coord_live_s <= 1'b1;
         end
     end
 
@@ -256,14 +290,18 @@ module ct_top (
     wire [17:0] rd_addr18 = ({9'd0, rrow} << 8) + ({9'd0, rrow} << 6) + {9'd0, rcol};
     wire [15:0] fb_dout;
 
+    wire fb_frame_sync;
+
     frame_buf u_fb (
-        .wr_clk  (ov_pclk),
-        .wr_en   (wr_en),
-        .wr_addr (wr_addr18[16:0]),
-        .wr_data (pix),
-        .rd_clk  (clk_pix),
-        .rd_addr (rd_addr18[16:0]),
-        .rd_data (fb_dout)
+        .wr_clk      (ov_pclk),
+        .wr_en       (wr_en),
+        .wr_addr     (wr_addr18[16:0]),
+        .wr_data     (pix),
+        .frame_start (frame_start),
+        .rd_clk      (clk_pix),
+        .rd_addr     (rd_addr18[16:0]),
+        .rd_data     (fb_dout),
+        .frame_sync  (fb_frame_sync)
     );
 
     // BRAM 输出延迟 1 拍，de/hs/vs 同步延迟 1 拍保持对齐
@@ -307,10 +345,14 @@ module ct_top (
 
     //======================================================================
     // LED 自检（低电平点亮）
+    //   LED0 = MMCM 锁定
+    //   LED1 = 合成像素 pix 非零过（诊断：字节对合成值是否有效）
+    //   LED2 = 坐标 cx/cy 在有效范围过（诊断：坐标是否越界）
+    //   LED3 = SCCB 出现 NACK（应为灭）
     //======================================================================
     assign led_n[0] = ~locked;
-    assign led_n[1] = ~cfg_done;
-    assign led_n[2] = ~vs_seen;
+    assign led_n[1] = ~pixnz_live_s;      // 诊断：pix != 0 过 = 亮
+    assign led_n[2] = ~coord_live_s;      // 诊断：cx<640 && cy<480 过 = 亮
     assign led_n[3] = ~(|cfg_err_cnt);
 
 endmodule
